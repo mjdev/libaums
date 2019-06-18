@@ -1,0 +1,238 @@
+/*
+ * (C) Copyright 2014-2016 mjahnen <jahnen@in.tum.de>
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
+
+package com.github.mjdev.libaums.fs.fat16;
+
+import com.github.mjdev.libaums.driver.BlockDeviceDriver;
+import com.github.mjdev.libaums.fs.AbstractUsbFile;
+import com.github.mjdev.libaums.fs.UsbFile;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.util.Arrays;
+
+public class FatFile extends AbstractUsbFile {
+
+    private BlockDeviceDriver blockDevice;
+    private FAT fat;
+    private Fat16BootSector bootSector;
+
+    private FatDirectory parent;
+    //	private ClusterChain chain;
+    private FAT16LongNameEntry entry;
+    private long startClusterByteValue;
+
+    /**
+     * Constructs a new file with the given information.
+     *
+     * @param blockDevice The device where the file system is located.
+     * @param fat         The FAT used to follow cluster chains.
+     * @param bootSector  The boot sector of the file system.
+     * @param entry       The corresponding entry in a FAT directory.
+     * @param parent      The parent directory of the newly constructed file.
+     */
+    private FatFile(BlockDeviceDriver blockDevice, FAT fat, Fat16BootSector bootSector,
+                    FAT16LongNameEntry entry, FatDirectory parent) {
+        this.blockDevice = blockDevice;
+        this.fat = fat;
+        this.bootSector = bootSector;
+        this.entry = entry;
+        this.parent = parent;
+    }
+
+    /**
+     * Creates a new file with the given information.
+     *
+     * @param entry       The corresponding entry in a FAT directory.
+     * @param blockDevice The device where the file system is located.
+     * @param fat         The FAT used to follow cluster chains.
+     * @param bootSector  The boot sector of the file system.
+     * @param parent      The parent directory of the newly created file.
+     * @return The newly constructed file.
+     * @throws IOException If reading from device fails.
+     */
+    public static FatFile create(FAT16LongNameEntry entry, BlockDeviceDriver blockDevice,
+                                 FAT fat, Fat16BootSector bootSector, FatDirectory parent) throws IOException {
+        return new FatFile(blockDevice, fat, bootSector, entry, parent);
+    }
+
+    /**
+     * Initializes the cluster chain to access the contents of the file.
+     *
+     * @throws IOException If reading from FAT fails.
+     */
+//	private void initChain() throws IOException {
+//		if (chain == null) {
+//			chain = new ClusterChain(entry.getStartCluster(), blockDevice, fat, bootSector);
+//		}
+//	}
+    @Override
+    public boolean isDirectory() {
+        return false;
+    }
+
+    @Override
+    public String getName() {
+        return entry.getName();
+    }
+
+    @Override
+    public void setName(String newName) throws IOException {
+        parent.renameEntry(entry, newName);
+    }
+
+    @Override
+    public long createdAt() {
+        return entry.getActualEntry().getCreatedDateTime();
+    }
+
+    @Override
+    public long lastModified() {
+        return entry.getActualEntry().getLastModifiedDateTime();
+    }
+
+    @Override
+    public long lastAccessed() {
+        return entry.getActualEntry().getLastAccessedDateTime();
+    }
+
+    @Override
+    public UsbFile getParent() {
+        return parent;
+    }
+
+    @Override
+    public String[] list() {
+        throw new UnsupportedOperationException("This is a file!");
+    }
+
+    @Override
+    public UsbFile[] listFiles() throws IOException {
+        throw new UnsupportedOperationException("This is a file!");
+    }
+
+    @Override
+    public long getLength() {
+        return entry.getFileSize();
+    }
+
+    @Override
+    public void setLength(long newLength) throws IOException {
+		entry.setFileSize(newLength);
+    }
+
+    @Override
+    public void read(long offset, ByteBuffer destination) throws IOException {
+        Long[] chain = fat.getChain(entry.getStartCluster());
+
+        int clusterToRead = (int) (offset / bootSector.getBytesPerCluster());
+        int clusterOffset = (int) (offset % bootSector.getBytesPerCluster());
+
+        Long clusterToReadPosition = bootSector.getByteAddressForCluster(chain[clusterToRead]);
+
+        blockDevice.read(clusterToReadPosition + clusterOffset, destination);
+    }
+
+    @Override
+    public void write(long offset, ByteBuffer source) throws IOException {
+        long length = offset + source.remaining();
+        if (length > getLength())
+			setLength(length);
+
+        Long[] chain = fat.getChain(entry.getStartCluster(), length);
+
+        int clusterToWrite = (int) (offset / bootSector.getBytesPerCluster());
+        int clusterOffset = (int) (offset % bootSector.getBytesPerCluster());
+
+        Long clusterToWritePosition = bootSector.getByteAddressForCluster(chain[clusterToWrite]);
+
+        this.setStartClusterByteValue(clusterToWritePosition + clusterOffset);
+        blockDevice.write(clusterToWritePosition + clusterOffset, source);
+
+        entry.setStartCluster(chain[0]);
+        entry.setLastModifiedTimeToNow();
+
+        parent.write();
+    }
+
+    @Override
+    public void flush() throws IOException {
+        // we only have to update the parent because we are always writing
+        // everything
+        // immediately to the device
+        // the parent directory is responsible for updating the
+        // FatDirectoryEntry which
+        // contains things like the file size and the date time fields
+        parent.write();
+    }
+
+    @Override
+    public void close() throws IOException {
+        flush();
+    }
+
+    @Override
+    public UsbFile createDirectory(String name) throws IOException {
+        throw new UnsupportedOperationException("This is a file!");
+    }
+
+    @Override
+    public UsbFile createFile(String name) throws IOException {
+        throw new UnsupportedOperationException("This is a file!");
+    }
+
+    @Override
+    public void moveTo(UsbFile destination) throws IOException {
+        parent.move(entry, destination);
+        parent = (FatDirectory) destination;
+    }
+
+    @Override
+    public void delete() throws IOException {
+		parent.removeEntry(entry);
+		parent.write();
+		fat.free(entry.getStartCluster());
+    }
+
+    @Override
+    public boolean isRoot() {
+        return false;
+    }
+
+    @Override
+    public String toString() {
+        try {
+            return "FatFile{" +
+                    "blockDevice=" + blockDevice +
+                    "chain=" + (entry == null ? "root" : Arrays.toString(fat.getChain(entry.getStartCluster()))) +
+                    "startClusterByteValue=" + startClusterByteValue +
+                    ", startcluster=" + (entry == null? "root": this.entry.getStartCluster()) +
+
+                    '}';
+        } catch (IOException e) {
+            return "oh nooooes";
+        }
+    }
+
+    public void setStartClusterByteValue(long startClusterByteValue) {
+        this.startClusterByteValue = startClusterByteValue;
+    }
+
+    public long getStartClusterByteValue() {
+        return startClusterByteValue;
+    }
+}

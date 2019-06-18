@@ -1,4 +1,4 @@
-package com.github.mjdev.libaums.fs.fat32;
+package com.github.mjdev.libaums.fs.fat16;
 
 import com.eclipsesource.json.Json;
 import com.eclipsesource.json.JsonObject;
@@ -17,20 +17,17 @@ import java.io.IOException;
 import java.net.URL;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
+import java.util.zip.GZIPInputStream;
 
 import static org.junit.Assert.fail;
 
-/**
- * Created by magnusja on 19/09/17.
- */
-
-public class Fat32FileSystemProducer implements IProducer<Pair<Fat32FileSystem, JsonObject>> {
+public class Fat16FileSystemProducer implements IProducer<Pair<Fat16FileSystem, JsonObject>> {
     private File originalFile;
     private File tempFile;
     private BlockDeviceDriver blockDevice;
     private JsonObject expectedValues;
 
-    public Fat32FileSystemProducer(String jsonUrl, String imageUrl) {
+    public Fat16FileSystemProducer(String jsonUrl, String imageUrl) {
         try {
             expectedValues = Json.parse(IOUtils.toString(
                     new URL(jsonUrl)
@@ -42,8 +39,25 @@ public class Fat32FileSystemProducer implements IProducer<Pair<Fat32FileSystem, 
             tempFile.deleteOnExit();
             FileOutputStream fos = new FileOutputStream(tempFile);
             fos.getChannel().transferFrom(rbc, 0, Long.MAX_VALUE);
+            fos.close();
 
-            this.originalFile = tempFile;
+            byte[] buffer = new byte[1024];
+
+            File unzipped = File.createTempFile("unzipped-file", ".iso");
+            unzipped.deleteOnExit();
+
+            GZIPInputStream gzis = new GZIPInputStream(new FileInputStream(tempFile));
+            FileOutputStream unzippedFOS = new FileOutputStream(unzipped);
+
+            int len;
+            while ((len = gzis.read(buffer)) > 0) {
+                unzippedFOS.write(buffer, 0, len);
+            }
+
+            gzis.close();
+            unzippedFOS.close();
+
+            this.originalFile = unzipped;
 
             // force first copy
             cleanUp();
@@ -55,7 +69,7 @@ public class Fat32FileSystemProducer implements IProducer<Pair<Fat32FileSystem, 
 
     }
 
-    public synchronized Pair<Fat32FileSystem, JsonObject> newInstance() {
+    public synchronized Pair<Fat16FileSystem, JsonObject> newInstance() {
         try {
             blockDevice = new ByteBlockDevice(
                     new FileBlockDeviceDriver(
@@ -63,7 +77,7 @@ public class Fat32FileSystemProducer implements IProducer<Pair<Fat32FileSystem, 
                             expectedValues.get("blockSize").asInt(),
                             expectedValues.get("blockSize").asInt() * expectedValues.get("fileSystemOffset").asInt()));
             blockDevice.init();
-            return new Pair<>(Fat32FileSystem.read(blockDevice), expectedValues);
+            return new Pair<>(Fat16FileSystem.read(blockDevice), expectedValues);
         } catch (IOException e) {
             e.printStackTrace();
             fail();

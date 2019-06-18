@@ -3,6 +3,7 @@ package com.github.mjdev.libaums.fs;
 import com.eclipsesource.json.JsonArray;
 import com.eclipsesource.json.JsonObject;
 import com.eclipsesource.json.JsonValue;
+import com.github.mjdev.libaums.fs.fat16.FatDirectory;
 import com.github.mjdev.libaums.util.Pair;
 
 import org.apache.commons.io.IOUtils;
@@ -121,17 +122,6 @@ public class UsbFileTest {
     }
 
     @ContractTest
-    public void createdAt() throws Exception {
-        FileSystemFactory.setTimeZone(TimeZone.getTimeZone(expectedValues.get("timezone").asString()));
-        JsonObject foldersToMove = expectedValues.get("createdAt").asObject();
-
-        for (JsonObject.Member member : foldersToMove) {
-            UsbFile file = root.search(member.getName());
-            assertEquals(member.getName(), member.getValue().asLong(), file.createdAt() / 1000);
-        }
-    }
-
-    @ContractTest
     public void lastModified() throws Exception {
         FileSystemFactory.setTimeZone(TimeZone.getTimeZone(expectedValues.get("timezone").asString()));
 
@@ -140,18 +130,6 @@ public class UsbFileTest {
         for (JsonObject.Member member : foldersToMove) {
             UsbFile file = root.search(member.getName());
             assertEquals(member.getName(), member.getValue().asLong(), file.lastModified() / 1000);
-        }
-    }
-
-    @ContractTest
-    public void lastAccessed() throws Exception {
-        FileSystemFactory.setTimeZone(TimeZone.getTimeZone(expectedValues.get("timezone").asString()));
-
-        JsonObject foldersToMove = expectedValues.get("lastAccessed").asObject();
-
-        for (JsonObject.Member member : foldersToMove) {
-            UsbFile file = root.search(member.getName());
-            assertEquals(member.getName(), member.getValue().asLong(), file.lastAccessed() / 1000);
         }
     }
 
@@ -324,8 +302,6 @@ public class UsbFileTest {
 
     @ContractTest
     public void write() throws Exception {
-        // TODO test exception when disk is full
-        URL bigFileUrl = new URL(expectedValues.get("bigFileToWrite").asString());
         ByteBuffer buffer = ByteBuffer.allocate(512);
         buffer.put("this is just a test!".getBytes());
         buffer.flip();
@@ -342,9 +318,9 @@ public class UsbFileTest {
         assertEquals("this is just a test!", new String(dst));
 
         UsbFile bigFile = root.createFile("bigwritetest");
-        IOUtils.copy(bigFileUrl.openStream(), new UsbFileOutputStream(bigFile));
+        IOUtils.copy(new RepeatedSequenceInputStream("ABCD1234".getBytes(), 300 * 1024 * 1024), new UsbFileOutputStream(bigFile));
 
-        IOUtils.contentEquals(bigFileUrl.openStream(), new UsbFileInputStream(bigFile));
+        IOUtils.contentEquals(new RepeatedSequenceInputStream("ABCD1234".getBytes(), 300 * 1024 * 1024), new UsbFileInputStream(bigFile));
 
         newInstance();
 
@@ -357,7 +333,7 @@ public class UsbFileTest {
 
         bigFile = root.search("bigwritetest");
 
-        IOUtils.contentEquals(bigFileUrl.openStream(), new UsbFileInputStream(bigFile));
+        IOUtils.contentEquals(new RepeatedSequenceInputStream("ABCD1234".getBytes(), 300 * 1024 * 1024), new UsbFileInputStream(bigFile));
     }
 
     @ContractTest
@@ -373,14 +349,18 @@ public class UsbFileTest {
     @ContractTest
     public void createDirectory() throws Exception {
         UsbFile directory = root.createDirectory("new dir");
+        root.createDirectory("seconddir");
         UsbFile subDir = directory.createDirectory("new subdir");
 
         assertTrue(root.search(directory.getName()).isDirectory());
+        assertTrue(root.search("seconddir").isDirectory());
+
         assertTrue(root.search(directory.getName() + UsbFile.separator + subDir.getName()).isDirectory());
 
         newInstance();
 
         assertTrue(root.search(directory.getName()).isDirectory());
+        assertTrue(root.search("seconddir").isDirectory());
         assertTrue(root.search(directory.getName() + UsbFile.separator + subDir.getName()).isDirectory());
 
         try {
