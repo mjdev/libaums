@@ -255,7 +255,6 @@ class ScsiBlockDevice(private val usbCommunication: UsbCommunication, private va
         }
 
         var transferLength = command.dCbwDataTransferLength
-        inBuffer.clear()
         inBuffer.limit(transferLength)
 
         var read = 0
